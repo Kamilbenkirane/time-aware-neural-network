@@ -71,7 +71,7 @@ print(f"Selected {len(selected_parents)} parents from population of {len(populat
 ```python
 from numba_ga import predict_individual, reset_population_memory
 
-# Initialize network parameters and memory
+# Initialize network network and memory
 parameters = population[0]  # Use first individual
 activations = np.array([1, 2], dtype=np.int64)  # ReLU -> Sigmoid
 states, times = reset_population_memory(layer_sizes, 1)

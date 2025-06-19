@@ -1,6 +1,6 @@
 """
 Test 02: Individual Parameter Initialization
-Tests initialize_parameters() function for neural network parameter initialization
+Tests initialize_individual() function for neural network parameter initialization
 Simple tests to verify parameter initialization is correct and reproducible
 """
 
@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 
 # Import the functions we're testing
-from numba_ga import initialize_parameters, get_total_parameters
+from numba_ga import initialize_individual, get_total_parameters
 
 
 def run_test():
@@ -21,7 +21,7 @@ def run_test():
     # Test 1: Basic parameter initialization
     print("Test 1: Basic parameter initialization")
     layer_sizes = np.array([3, 5, 2], dtype=np.int64)  # 3->5->2
-    parameters = initialize_parameters(layer_sizes)
+    parameters = initialize_individual(layer_sizes)
     
     expected_length = get_total_parameters(layer_sizes)  # Should be 39
     print(f"  Network: 3->5->2")
@@ -34,17 +34,17 @@ def run_test():
     print(f"  Weight dtype: {parameters.dtype}")
     assert parameters.dtype == np.float64, f"Expected float64, got {parameters.dtype}"
     
-    # Check that parameters are not all zeros
-    print(f"  Non-zero parameters: {np.count_nonzero(parameters)}/{len(parameters)}")
-    assert np.count_nonzero(parameters) > 0, "All parameters are zero!"
+    # Check that network are not all zeros
+    print(f"  Non-zero network: {np.count_nonzero(parameters)}/{len(parameters)}")
+    assert np.count_nonzero(parameters) > 0, "All network are zero!"
     
     # Test 2: Seeded initialization (reproducibility)
     print("\nTest 2: Seeded initialization")
     layer_sizes = np.array([4, 6, 3], dtype=np.int64)
     
-    parameters1 = initialize_parameters(layer_sizes, seed=42)
-    parameters2 = initialize_parameters(layer_sizes, seed=42)
-    parameters3 = initialize_parameters(layer_sizes, seed=123)
+    parameters1 = initialize_individual(layer_sizes, seed=42)
+    parameters2 = initialize_individual(layer_sizes, seed=42)
+    parameters3 = initialize_individual(layer_sizes, seed=123)
     
     print(f"  Same seed results match: {np.array_equal(parameters1, parameters2)}")
     print(f"  Different seed results differ: {not np.array_equal(parameters1, parameters3)}")
@@ -64,7 +64,7 @@ def run_test():
     
     for arch in architectures:
         layer_sizes = np.array(arch, dtype=np.int64)
-        parameters = initialize_parameters(layer_sizes, seed=1)
+        parameters = initialize_individual(layer_sizes, seed=1)
         expected_len = get_total_parameters(layer_sizes)
         
         arch_str = "->".join(map(str, arch))
@@ -75,7 +75,7 @@ def run_test():
     # Test 4: Weight distribution properties
     print("\nTest 4: Weight distribution properties")
     layer_sizes = np.array([50, 100, 50], dtype=np.int64)  # Larger network for statistics
-    parameters = initialize_parameters(layer_sizes, seed=42)
+    parameters = initialize_individual(layer_sizes, seed=42)
     
     mean_val = np.mean(parameters)
     std_val = np.std(parameters)
@@ -98,38 +98,38 @@ def run_test():
     layer_sizes = np.array([3, 4, 2], dtype=np.int64)
     
     # Without seed - should be different each time
-    parameters_a = initialize_parameters(layer_sizes)
-    parameters_b = initialize_parameters(layer_sizes)
+    parameters_a = initialize_individual(layer_sizes)
+    parameters_b = initialize_individual(layer_sizes)
     
     # With seed - should be same
-    parameters_c = initialize_parameters(layer_sizes, seed=999)
-    parameters_d = initialize_parameters(layer_sizes, seed=999)
+    parameters_c = initialize_individual(layer_sizes, seed=999)
+    parameters_d = initialize_individual(layer_sizes, seed=999)
     
     print(f"  No seed - different results: {not np.array_equal(parameters_a, parameters_b)}")
     print(f"  With seed - same results: {np.array_equal(parameters_c, parameters_d)}")
     
-    # Note: There's a small chance random parameters could be identical, but very unlikely
+    # Note: There's a small chance random network could be identical, but very unlikely
     # We'll just check they're not identical (could theoretically fail but very rare)
     same_no_seed = np.array_equal(parameters_a, parameters_b)
     if same_no_seed:
-        print("  Warning: Random parameters were identical (very rare but possible)")
+        print("  Warning: Random network were identical (very rare but possible)")
     
-    assert np.array_equal(parameters_c, parameters_d), "Seeded parameters should be identical"
+    assert np.array_equal(parameters_c, parameters_d), "Seeded network should be identical"
     
     # Test 6: Edge cases
     print("\nTest 6: Edge cases")
     
     # Single connection
     layer_sizes = np.array([1, 1], dtype=np.int64)
-    parameters = initialize_parameters(layer_sizes, seed=1)
-    expected_len = 1 * 1 + 1 + 1  # parameters + biases + alphas = 3 total
+    parameters = initialize_individual(layer_sizes, seed=1)
+    expected_len = 1 * 1 + 1 + 1  # network + biases + alphas = 3 total
     print(f"  Single connection (1->1): length {len(parameters)}, expected {expected_len}")
     assert len(parameters) == expected_len, "Single connection failed"
     
     # Large network
     layer_sizes = np.array([100, 50], dtype=np.int64)
-    parameters = initialize_parameters(layer_sizes, seed=1)
-    expected_len = 100 * 50 + 50 + 50  # parameters + biases + alphas = 5100 total
+    parameters = initialize_individual(layer_sizes, seed=1)
+    expected_len = 100 * 50 + 50 + 50  # network + biases + alphas = 5100 total
     print(f"  Large network (100->50): length {len(parameters)}, expected {expected_len}")
     assert len(parameters) == expected_len, "Large network failed"
     

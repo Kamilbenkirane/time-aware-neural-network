@@ -131,7 +131,7 @@ def evaluate_population_fitness_batch(population, fitness_func_id, fitness_param
     Args:
         population: 2D population weight array
         fitness_func_id: ID for fitness function type (0=sphere, 1=simple_test)
-        fitness_params: Array of fitness function parameters
+        fitness_params: Array of fitness function network
     
     Returns:
         1D array of fitness scores
@@ -379,7 +379,7 @@ def evolution_step_simple(population, fitness_scores, tournament_size, num_paren
         mutation_rate: Mutation probability per weight
         mutation_strength: Mutation standard deviation
         fitness_func_id: Simple fitness function ID
-        fitness_params: Fitness function parameters
+        fitness_params: Fitness function network
     
     Returns:
         Tuple of (new_population, new_fitness_scores, generation_stats)

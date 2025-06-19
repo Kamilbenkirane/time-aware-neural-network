@@ -18,7 +18,7 @@ RESOLUTION_MS = 1  # 1 millisecond resolution
 
 @njit(fastmath=True, cache=True)
 def get_layer_parameters(layer_sizes, layer_id):
-    """Calculate parameters for connection: layer[layer_id] -> layer[layer_id + 1]."""
+    """Calculate network for connection: layer[layer_id] -> layer[layer_id + 1]."""
     from_size = layer_sizes[layer_id]
     to_size = layer_sizes[layer_id + 1]
     # Weights: from_size * to_size + Biases: to_size + Alphas: to_size (one per neuron)
@@ -27,11 +27,47 @@ def get_layer_parameters(layer_sizes, layer_id):
 
 @njit(fastmath=True, cache=True)
 def get_total_parameters(layer_sizes):
-    """Calculate total parameters for time-aware neural network."""
+    """Calculate total network for time-aware neural network."""
     total = 0
     for layer_id in range(len(layer_sizes) - 1):
         total += get_layer_parameters(layer_sizes, layer_id)
     return total
+
+
+@njit(fastmath=True, cache=True)
+def extract_layer_parameters(parameters, param_indices, layer_id, from_size, to_size):
+    """
+    Extract weights, biases, and alphas for a specific layer.
+    
+    Args:
+        parameters: Flat parameter array for entire network
+        param_indices: Pre-computed parameter start indices for each layer
+        layer_id: Which layer to extract (0-indexed)
+        from_size: Input size for this layer
+        to_size: Output size for this layer
+        
+    Returns:
+        weights_flat: Flat weight array (from_size * to_size)
+        biases: Bias array (to_size)
+        alphas: Alpha array (to_size) for time-aware integration
+        weights_matrix: Reshaped weight matrix (from_size, to_size)
+    """
+    # Calculate parameter slice indices
+    start_idx = param_indices[layer_id]
+    weights_size = from_size * to_size
+    weights_end = start_idx + weights_size
+    biases_end = weights_end + to_size
+    alphas_end = biases_end + to_size
+    
+    # Extract parameter arrays
+    weights_flat = parameters[start_idx:weights_end]
+    biases = parameters[weights_end:biases_end]
+    alphas = parameters[biases_end:alphas_end]
+    
+    # Reshape weights for matrix operations
+    weights_matrix = weights_flat.reshape((from_size, to_size))
+    
+    return weights_flat, biases, alphas, weights_matrix
 
 
 # ============================================================================
@@ -41,8 +77,8 @@ def get_total_parameters(layer_sizes):
 
 
 @njit(fastmath=True, cache=True)
-def initialize_parameters(layer_sizes, seed=None):
-    """Initialize parameters for neural network with optional seed for reproducibility."""
+def initialize_individual(layer_sizes, seed=None):
+    """Initialize network for neural network with optional seed for reproducibility."""
     total_parameters = get_total_parameters(layer_sizes)
     parameters = np.zeros(total_parameters, dtype=np.float64)
     
@@ -63,7 +99,7 @@ def initialize_parameters(layer_sizes, seed=None):
 
 @njit(fastmath=True, cache=True)
 def initialize_population(pop_size, layer_sizes, seed=None):
-    """Initialize a population of neural networks with random parameters."""
+    """Initialize a population of neural networks with random network."""
     total_parameters = get_total_parameters(layer_sizes)
     population = np.zeros((pop_size, total_parameters), dtype=np.float64)
     
@@ -169,7 +205,7 @@ def predict_individual(parameters, layer_sizes, activations, inputs,
     Predict output for a single neural network with temporal memory.
     
     Args:
-        parameters: Flat array of network parameters (weights + biases + alphas)
+        parameters: Flat array of network network (weights + biases + alphas)
         layer_sizes: Array of layer sizes [input, hidden1, ..., output]
         activations: Array of activation types for each layer transition
         inputs: Tuple (current_time, x_vector)
@@ -206,19 +242,10 @@ def predict_individual(parameters, layer_sizes, activations, inputs,
         from_size = layer_sizes[layer_id]
         to_size = layer_sizes[layer_id + 1]
         
-        # Extract parameters using pre-computed indices
-        start_idx = param_indices[layer_id]
-        weights_size = from_size * to_size
-        weights_end = start_idx + weights_size
-        biases_end = weights_end + to_size
-        alphas_end = biases_end + to_size
-        
-        weights_flat = parameters[start_idx:weights_end]
-        biases = parameters[weights_end:biases_end]
-        alphas = parameters[biases_end:alphas_end]
-        
-        # Reshape weights for efficient BLAS operation
-        weights_matrix = weights_flat.reshape((from_size, to_size))
+        # Extract network using reusable function
+        weights_flat, biases, alphas, weights_matrix = extract_layer_parameters(
+            parameters, param_indices, layer_id, from_size, to_size
+        )
         
         # Compute linear transformation using optimized BLAS
         linear_outputs = np.dot(current_values, weights_matrix) + biases
@@ -252,17 +279,6 @@ def predict_population(population, layer_sizes, activations, inputs,
                       population_states, population_prev_times):
     """
     Predict outputs for entire population with temporal memory.
-    
-    Args:
-        population: 2D array (pop_size, total_parameters)
-        layer_sizes: Array of layer sizes
-        activations: Array of activation types (shared by all individuals)
-        inputs: Tuple (current_time, x_vector)
-        population_states: 2D array (pop_size, total_neurons) - previous states
-        population_prev_times: 1D array (pop_size,) - previous timestamps
-        
-    Returns:
-        (outputs, updated_states, updated_times): Population results
     """
     current_time, x_vector = inputs
     pop_size = population.shape[0]
@@ -354,7 +370,7 @@ def tournament_selection(population, fitness_scores, tournament_size, num_parent
     pop_size = population.shape[0]
     num_parameters = population.shape[1]
     
-    # Clamp parameters to valid ranges (input validation)
+    # Clamp network to valid ranges (input validation)
     tournament_size = max(1, min(tournament_size, pop_size))
     num_parents = max(1, num_parents)
     
@@ -387,3 +403,243 @@ def tournament_selection(population, fitness_scores, tournament_size, num_parent
         selected_parents[parent_idx] = population[winner_idx]
     
     return selected_parents, selected_indices
+
+
+# ============================================================================
+# CROSSOVER OPERATIONS FOR GENETIC ALGORITHMS
+# ============================================================================
+
+@njit(fastmath=True, cache=True)
+def align_neurons_correlation(parent1, parent2, layer_sizes, seed=None):
+    """
+    Align neurons between two parents using weight correlation analysis.
+    
+    Solves the permutation problem by matching neurons with similar weight patterns.
+    For each layer, computes correlations between neuron weight vectors and rearranges 
+    parent2's neurons to best match parent1's neuron ordering.
+    
+    Args:
+        parent1: Flat parameter array for first parent
+        parent2: Flat parameter array for second parent  
+        layer_sizes: Array of layer sizes [input, hidden1, ..., output]
+        seed: Optional seed for reproducible results
+        
+    Returns:
+        aligned_parent1: Original parent1 (unchanged)
+        aligned_parent2: Parent2 with neurons rearranged to align with parent1
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    # Work with copies to avoid modifying originals
+    aligned_parent1 = parent1.copy()
+    aligned_parent2 = parent2.copy()
+    
+    # Pre-compute parameter indices for efficient access
+    param_indices, _ = compute_layer_indices(layer_sizes)
+    num_layers = len(layer_sizes) - 1
+    
+    # Process each layer sequentially (excluding input layer)
+    for layer_id in range(num_layers):
+        from_size = layer_sizes[layer_id]
+        to_size = layer_sizes[layer_id + 1]
+        
+        if to_size <= 1:
+            continue  # Skip layers with single neuron (nothing to align)
+        
+        # Extract network for both parents using reusable function
+        w1_flat, b1, a1, w1 = extract_layer_parameters(
+            aligned_parent1, param_indices, layer_id, from_size, to_size
+        )
+        w2_flat, b2, a2, w2 = extract_layer_parameters(
+            aligned_parent2, param_indices, layer_id, from_size, to_size
+        )
+        
+        # Calculate indices needed for parameter storage later
+        start_idx = param_indices[layer_id]
+        weights_size = from_size * to_size
+        weights_end = start_idx + weights_size
+        biases_end = weights_end + to_size
+        
+        # Compute correlation matrix between all neuron pairs
+        corr_matrix = np.zeros((to_size, to_size), dtype=np.float64)
+        
+        for i in range(to_size):  # neurons in parent1
+            for j in range(to_size):  # neurons in parent2
+                # Get incoming weight vectors + bias for correlation
+                weights1 = w1[:, i]  # incoming to neuron i in parent1
+                weights2 = w2[:, j]  # incoming to neuron j in parent2
+                
+                # Create extended vectors including bias
+                n = from_size
+                vec1 = np.zeros(n + 1, dtype=np.float64)
+                vec2 = np.zeros(n + 1, dtype=np.float64)
+                vec1[:n] = weights1
+                vec1[n] = b1[i]
+                vec2[:n] = weights2
+                vec2[n] = b2[j]
+                
+                # Compute Pearson correlation coefficient
+                mean1 = np.mean(vec1)
+                mean2 = np.mean(vec2)
+                
+                numerator = 0.0
+                sum_sq1 = 0.0
+                sum_sq2 = 0.0
+                
+                for k in range(n + 1):
+                    d1 = vec1[k] - mean1
+                    d2 = vec2[k] - mean2
+                    numerator += d1 * d2
+                    sum_sq1 += d1 * d1
+                    sum_sq2 += d2 * d2
+                
+                denominator = math.sqrt(sum_sq1 * sum_sq2)
+                if denominator < 1e-10:
+                    corr_matrix[i, j] = 0.0
+                else:
+                    corr_matrix[i, j] = numerator / denominator
+        
+        # Find optimal neuron matching using greedy algorithm
+        matching = np.zeros(to_size, dtype=np.int64)
+        used = np.zeros(to_size, dtype=np.bool_)
+        
+        for i in range(to_size):
+            best_j = -1
+            best_corr = -2.0  # Below minimum possible correlation
+            
+            for j in range(to_size):
+                if not used[j] and corr_matrix[i, j] > best_corr:
+                    best_corr = corr_matrix[i, j]
+                    best_j = j
+            
+            if best_j >= 0:
+                matching[i] = best_j
+                used[best_j] = True
+            else:
+                # Fallback: find first unused position
+                for j in range(to_size):
+                    if not used[j]:
+                        matching[i] = j
+                        used[j] = True
+                        break
+                else:
+                    matching[i] = i  # Should not happen in well-formed input
+        
+        # Rearrange parent2's network according to matching
+        # Create rearranged weight matrix, biases, and alphas
+        w2_aligned = np.zeros((from_size, to_size), dtype=np.float64)
+        b2_aligned = np.zeros(to_size, dtype=np.float64)
+        a2_aligned = np.zeros(to_size, dtype=np.float64)
+        
+        for i in range(to_size):
+            j = matching[i]  # neuron j in parent2 matches position i
+            w2_aligned[:, i] = w2[:, j]  # incoming weights
+            b2_aligned[i] = b2[j]        # bias
+            a2_aligned[i] = a2[j]        # alpha
+        
+        # Store rearranged network back into aligned_parent2
+        w2_aligned_flat = w2_aligned.flatten()
+        aligned_parent2[start_idx:weights_end] = w2_aligned_flat
+        aligned_parent2[weights_end:biases_end] = b2_aligned
+        aligned_parent2[biases_end:biases_end + to_size] = a2_aligned
+        
+        # Rearrange outgoing weights to next layer (if not output layer)
+        if layer_id < num_layers - 1:
+            next_layer_id = layer_id + 1
+            next_from_size = layer_sizes[next_layer_id]
+            next_to_size = layer_sizes[next_layer_id + 1]
+            
+            next_start_idx = param_indices[next_layer_id]
+            next_weights_size = next_from_size * next_to_size
+            next_weights_end = next_start_idx + next_weights_size
+            
+            # Extract next layer weights  
+            next_w_flat = aligned_parent2[next_start_idx:next_weights_end]
+            next_w = next_w_flat.reshape((next_from_size, next_to_size))
+            
+            # Rearrange rows according to current layer matching
+            next_w_aligned = np.zeros_like(next_w)
+            for i in range(to_size):
+                j = matching[i]
+                next_w_aligned[i, :] = next_w[j, :]
+            
+            # Store rearranged next layer weights
+            next_w_aligned_flat = next_w_aligned.flatten()
+            aligned_parent2[next_start_idx:next_weights_end] = next_w_aligned_flat
+    
+    return aligned_parent1, aligned_parent2
+
+
+@njit(fastmath=True, cache=True)
+def safe_arithmetic_crossover(parent1, parent2, layer_sizes, alpha=0.5, seed=None):
+    """
+    Perform safe arithmetic crossover after neuron alignment.
+    
+    First aligns neurons between parents using correlation analysis to solve 
+    the permutation problem, then performs arithmetic blending of aligned network.
+    This is the research-proven method for effective neural network crossover.
+    
+    Args:
+        parent1: Flat parameter array for first parent
+        parent2: Flat parameter array for second parent
+        layer_sizes: Array of layer sizes [input, hidden1, ..., output]
+        alpha: Blending factor in [0,1]. 0.0=parent2, 1.0=parent1, 0.5=average
+        seed: Optional seed for reproducible alignment
+        
+    Returns:
+        offspring: Blended parameter array combining both aligned parents
+    """
+    # Input validation
+    alpha_clamped = max(0.0, min(1.0, alpha))  # Clamp to valid range [0,1]
+    
+    # Validate parent compatibility
+    if len(parent1) != len(parent2):
+        # Return copy of first parent if incompatible shapes
+        return parent1.copy()
+    
+    # Align neurons first to solve permutation problem
+    aligned_parent1, aligned_parent2 = align_neurons_correlation(
+        parent1, parent2, layer_sizes, seed
+    )
+    
+    # Handle edge cases for alpha (AFTER alignment)
+    if alpha_clamped <= 0.0:
+        return aligned_parent2.copy()  # Return aligned second parent
+    elif alpha_clamped >= 1.0:
+        return aligned_parent1.copy()  # Return aligned first parent
+    
+    # Perform arithmetic crossover: offspring = α * p1 + (1-α) * p2
+    total_params = len(aligned_parent1)
+    offspring = np.zeros(total_params, dtype=np.float64)
+    
+    for i in range(total_params):
+        offspring[i] = alpha_clamped * aligned_parent1[i] + (1.0 - alpha_clamped) * aligned_parent2[i]
+    
+    return offspring
+
+
+# =============================================================================
+# MUTATION OPERATIONS
+# =============================================================================
+
+@njit(fastmath=True, cache=True)
+def adaptive_gaussian_mutation(individual, mutation_rate=0.05, fitness_score=1.0, seed=None):
+    """Adaptive Gaussian mutation with fitness-based sigma decay."""
+    if seed is not None:
+        np.random.seed(seed)
+    
+    # Adaptive sigma: poor fitness → higher sigma (more exploration)
+    sigma = 0.1 + max(0.0, 2.0 - fitness_score) * 0.5
+    
+    # Mutate random subset of network
+    total_params = len(individual)
+    num_mutations = max(1, int(total_params * mutation_rate))
+    
+    for _ in range(num_mutations):
+        idx = np.random.randint(0, total_params)
+        individual[idx] += np.random.normal(0.0, sigma)
+    
+    return individual
+
+

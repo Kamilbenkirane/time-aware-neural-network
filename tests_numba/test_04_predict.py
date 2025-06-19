@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import time
 from numba_ga import (
-    initialize_parameters, 
+    initialize_individual, 
     initialize_population,
     predict_individual,
     predict_population, 
@@ -26,8 +26,8 @@ def test_basic_prediction():
     layer_sizes = np.array([2, 3, 1], dtype=np.int64)
     activations = np.array([1, 2], dtype=np.int64)  # ReLU -> Sigmoid
     
-    # Initialize parameters
-    parameters = initialize_parameters(layer_sizes, seed=42)
+    # Initialize network
+    parameters = initialize_individual(layer_sizes, seed=42)
     
     # Test input
     current_time = 10.0
@@ -114,7 +114,7 @@ def test_temporal_patterns():
     activations = np.array([3, 0], dtype=np.int64)  # Tanh -> Linear
     
     # Initialize individual
-    parameters = initialize_parameters(layer_sizes, seed=999)
+    parameters = initialize_individual(layer_sizes, seed=999)
     
     # Pre-compute indices
     param_indices, neuron_indices = compute_layer_indices(layer_sizes)
@@ -171,7 +171,7 @@ def test_memory_persistence():
     layer_sizes = np.array([1, 3, 1], dtype=np.int64)
     activations = np.array([1, 2], dtype=np.int64)  # ReLU -> Sigmoid
     
-    parameters = initialize_parameters(layer_sizes, seed=777)
+    parameters = initialize_individual(layer_sizes, seed=777)
     param_indices, neuron_indices = compute_layer_indices(layer_sizes)
     
     # Test scenario: same input at different times
@@ -238,7 +238,7 @@ def test_stateless_compatibility():
     layer_sizes = np.array([2, 3, 2], dtype=np.int64)
     activations = np.array([2, 1], dtype=np.int64)  # Sigmoid -> ReLU
     
-    parameters = initialize_parameters(layer_sizes, seed=555)
+    parameters = initialize_individual(layer_sizes, seed=555)
     x_vector = np.array([0.3, -0.7], dtype=np.float64)
     
     # Stateless prediction

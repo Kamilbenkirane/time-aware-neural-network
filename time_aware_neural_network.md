@@ -20,7 +20,7 @@ class TimeAwareLinear(nn.Module):
         self.out_features = out_features
         self.alpha = alpha
         
-        # Learnable parameters
+        # Learnable network
         self.weight = nn.Parameter(torch.randn(out_features, in_features))
         self.bias = nn.Parameter(torch.randn(out_features))
         

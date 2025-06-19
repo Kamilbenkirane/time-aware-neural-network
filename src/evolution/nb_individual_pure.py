@@ -392,7 +392,7 @@ def benchmark_pure_individual_performance():
     """Benchmark pure individual function performance."""
     import time
     
-    # Test parameters
+    # Test network
     input_size, hidden_size, output_size = 1, 10, 3
     alpha = 1.0
     num_iterations = 10000

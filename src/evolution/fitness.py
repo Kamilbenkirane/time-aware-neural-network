@@ -1,6 +1,5 @@
 import numpy as np
 from typing import Callable
-from .nb_individual import Individual
 
 # Global variables for multiprocessing (fitness function state)
 _global_prices = None

@@ -1,6 +1,5 @@
 """NEAT: Neural Evolution for Automated Trading"""
 
-from src.neural.neuron import TimeAwareLinear, TimeAwareNetwork
-from src.evolution.individual import Individual
+from . import tann
 
-__all__ = ['TimeAwareLinear', 'TimeAwareNetwork', 'Individual']
+__all__ = ['tann']

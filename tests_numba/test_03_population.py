@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 
 # Import the functions we're testing
-from numba_ga import initialize_population, get_total_parameters, initialize_parameters
+from numba_ga import initialize_population, get_total_parameters, initialize_individual
 
 
 def run_test():
@@ -47,7 +47,7 @@ def run_test():
     
     # Test 3: Compare with single individual initialization
     print("\nTest 3: Consistency with single individual initialization")
-    single_individual = initialize_parameters(layer_sizes, seed=99)
+    single_individual = initialize_individual(layer_sizes, seed=99)
     pop_with_seed = initialize_population(1, layer_sizes, seed=99)
     
     print(f"  Single individual shape: {single_individual.shape}")

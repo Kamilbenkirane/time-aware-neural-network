@@ -10,8 +10,14 @@ LOC = 0.0
 SCALE = 1.0
 
 @njit(fastmath=True, cache=False)
-def initialize_individual(layer_sizes, seed=None):
-    """Initialize network for neural network with optional seed for reproducibility."""
+def initialize_individual(layer_sizes, seed=None, init_method="he"):
+    """Initialize network for neural network with optional seed for reproducibility.
+
+    Args:
+        layer_sizes: List of layer sizes
+        seed: Random seed for reproducibility
+        init_method: Initialization method - "he", "xavier", or "normal"
+    """
     total_parameters = get_total_parameters(layer_sizes)
     parameters = np.zeros(total_parameters, dtype=np.float64)
 
@@ -19,8 +25,46 @@ def initialize_individual(layer_sizes, seed=None):
     if seed is not None:
         np.random.seed(seed)
 
-    for i in range(total_parameters):
-        parameters[i] = np.random.normal(LOC, SCALE)
+    # Initialize parameters layer by layer with appropriate scaling
+    param_idx = 0
+    num_layers = len(layer_sizes) - 1
+
+    for layer in range(num_layers):
+        fan_in = layer_sizes[layer]
+        fan_out = layer_sizes[layer + 1]
+
+        # Calculate appropriate scale based on initialization method
+        if init_method == "he":
+            # He initialization for ReLU activations
+            weight_scale = np.sqrt(2.0 / fan_in)
+        elif init_method == "xavier":
+            # Xavier/Glorot initialization for tanh/sigmoid
+            weight_scale = np.sqrt(2.0 / (fan_in + fan_out))
+        else:
+            # Default normal initialization
+            weight_scale = SCALE
+
+        # Initialize weights
+        num_weights = fan_in * fan_out
+        for i in range(num_weights):
+            parameters[param_idx] = np.random.normal(LOC, weight_scale)
+            param_idx += 1
+
+        # Initialize biases (small positive values for ReLU to avoid dead neurons)
+        for i in range(fan_out):
+            if init_method == "he" and layer < num_layers - 1:  # For hidden layers with ReLU
+                parameters[param_idx] = 0.01  # Small positive bias
+            else:
+                parameters[param_idx] = 0.0  # Zero for output layer
+            param_idx += 1
+
+        # Initialize alphas (time decay parameters) - should be in [0, 1]
+        for i in range(fan_out):
+            # Initialize closer to 0 for more responsive network (0.0 to 0.5)
+            # High alpha = more memory but less responsive to inputs
+            # Low alpha = less memory but more responsive to inputs
+            parameters[param_idx] = 0.5 * np.random.random()
+            param_idx += 1
 
     return parameters
 
@@ -42,20 +86,20 @@ def predict_individual(parameters, layer_sizes, activations, inputs,
         neuron_indices: Pre-computed neuron state indices for each layer
 
     Returns:
-        (outputs, new_states, current_time): Updated outputs and states
+        (outputs, new_states): Updated outputs and states
     """
     # Input validation
     if len(inputs) != 2:
-        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states, 0.0
+        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states
 
     current_time, x_vector = inputs
 
     # Validate input dimensions
     if len(x_vector) != layer_sizes[0]:
-        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states, current_time
+        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states
 
     if len(prev_states) != sum(layer_sizes[1:]):
-        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states, current_time
+        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states
 
     time_diff = max(0.0, current_time - prev_time)  # Ensure non-negative time diff
 
@@ -98,4 +142,37 @@ def predict_individual(parameters, layer_sizes, activations, inputs,
 
         current_values = next_values
 
-    return current_values, new_states, current_time
+    return current_values, new_states
+
+
+@njit(fastmath=True, cache=True)
+def individual_actions(individual, layer_sizes, layer_activations,
+                    previous_states, previous_time, param_indices,
+                    neuron_indices, timestamps, feature_values):
+  """
+  Compute actions for an individual across multiple timestamps.
+  """
+  n_timestamps = len(timestamps)
+  actions = np.zeros(n_timestamps, dtype=np.int64)
+
+  # Copy initial states to avoid modifying input
+  current_states = np.copy(previous_states)
+  current_time = previous_time
+
+  for i in range(n_timestamps):
+      # Create input tuple
+      inputs = (timestamps[i], feature_values[i])
+
+      # Get prediction - now returns only 2 values (removed current_time)
+      outputs, current_states = predict_individual(
+          individual, layer_sizes, layer_activations, inputs,
+          current_states, current_time, param_indices, neuron_indices
+      )
+
+      # Update time for next iteration
+      current_time = timestamps[i]
+
+      # Compute action using argmax
+      actions[i] = np.argmax(outputs)
+
+  return actions

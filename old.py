@@ -1,213 +1,178 @@
-# ============================================================================
-# INDIVIDUAL WEIGHT INITIALIZATION
-# ============================================================================
+import math
+
+import numpy as np
+from numba import prange, njit
+
+RESOLUTION = .001  # 1 millisecond resolution
+
+@njit(fastmath=True, cache=True, parallel=True)
+def get_population_actions(population, layer_sizes, layer_activations,
+                       population_states, previous_time, param_indices,
+                       neuron_indices, timestamps, feature_values):
+    """
+    Compute actions for an entire population across multiple timestamps.
+    """
+    pop_size = population.shape[0]
+    n_timestamps = len(timestamps)
+    actions = np.zeros((pop_size, n_timestamps), dtype=np.int64)
+
+    # Process each individual in parallel
+    for i in prange(pop_size):
+        # Use individual_actions directly to avoid code duplication
+        actions[i] = individual_actions(
+            population[i], layer_sizes, layer_activations,
+            population_states[i], previous_time, param_indices,
+            neuron_indices, timestamps, feature_values
+        )
+
+    return actions
 
 @njit(fastmath=True, cache=True)
-def initialize_weights(layer_sizes, seed=None):
-    """Initialize random weights for neural network."""
-    if seed is not None:
-        np.random.seed(seed)
+def individual_actions(individual, layer_sizes, layer_activations, previous_states, previous_time, param_indices, neuron_indices, timestamps, feature_values):
+    n_timestamps = len(timestamps)
+    actions = np.zeros(n_timestamps, dtype=np.int64)
+    for i in range(n_timestamps):
+        current_time = timestamps[i]
+        values = feature_values[i]
+        inputs = (current_time, values)
+        current_values, new_states = predict_individual(individual, layer_sizes, layer_activations, inputs, previous_states, previous_time, param_indices, neuron_indices)
+        previous_states = new_states
+        previous_time = current_time
+        actions[i] = np.argmax(current_values)
 
-    total_parameters = get_total_parameters(layer_sizes)
-    parameters = np.random.randn(total_parameters).astype(np.float64) * 0.3
-    return weights
+    return actions
+
+@njit(fastmath=True, cache=False)
+def predict_individual(parameters, layer_sizes, activations, inputs,
+                       prev_states, prev_time, param_indices, neuron_indices):
+    """
+    Predict output for a single neural network with temporal memory.
+
+    Args:
+        parameters: Flat array of network network (weights + biases + alphas)
+        layer_sizes: Array of layer sizes [input, hidden1, ..., output]
+        activations: Array of activation types for each layer transition
+        inputs: Tuple (current_time, x_vector)
+        prev_states: Previous neuron states (pre-activation)
+        prev_time: Previous evaluation timestamp
+        param_indices: Pre-computed parameter indices for each layer
+        neuron_indices: Pre-computed neuron state indices for each layer
+
+    Returns:
+        (outputs, new_states): Updated outputs and states
+    """
+    # Input validation
+    if len(inputs) != 2:
+        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states
+
+    current_time, x_vector = inputs
+
+    # Validate input dimensions
+    if len(x_vector) != layer_sizes[0]:
+        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states
+
+    if len(prev_states) != sum(layer_sizes[1:]):
+        return np.zeros(layer_sizes[-1], dtype=np.float64), prev_states
+
+    time_diff = max(0.0, current_time - prev_time)  # Ensure non-negative time diff
+
+    # Initialize with input layer
+    current_values = x_vector
+    # Pre-allocate new states array (no initialization needed - we overwrite everything)
+    new_states = np.empty_like(prev_states)
+
+    # Forward pass through each layer
+    for layer_id in range(len(layer_sizes) - 1):
+        from_size = layer_sizes[layer_id]
+        to_size = layer_sizes[layer_id + 1]
+
+        # Extract network using reusable function
+        weights_flat, biases, alphas, weights_matrix = extract_layer_parameters(
+            parameters, param_indices, layer_id, from_size, to_size
+        )
+
+        # Compute linear transformation using optimized BLAS
+        linear_outputs = np.dot(current_values, weights_matrix) + biases
+
+        # Apply time-aware memory integration for each neuron
+        neuron_start = neuron_indices[layer_id]
+        next_values = np.zeros(to_size, dtype=np.float64)
+
+        for i in range(to_size):
+            neuron_idx = neuron_start + i
+            prev_neuron_state = prev_states[neuron_idx]
+
+            # Discrete-time leaky integration (pre-activation)
+            integrated_state = discrete_time_leaky_integration(
+                prev_neuron_state, linear_outputs[i], time_diff, alphas[i]
+            )
+
+            # Apply activation function
+            next_values[i] = apply_activation(integrated_state, activations[layer_id])
+
+            # Store pre-activation state for next iteration
+            new_states[neuron_idx] = integrated_state
+
+        current_values = next_values
+
+    return current_values, new_states
 
 
-# ============================================================================
-# POPULATION INITIALIZATION
-# ============================================================================
+@njit(fastmath=True, cache=False)
+def extract_layer_parameters(parameters, param_indices, layer_id, from_size, to_size):
+    """
+    Extract weights, biases, and alphas for a specific layer.
+    """
+    # Calculate parameter slice indices
+    start_idx = param_indices[layer_id]
+    weights_size = from_size * to_size
+    weights_end = start_idx + weights_size
+    biases_end = weights_end + to_size
+    alphas_end = biases_end + to_size
 
-@njit(fastmath=True, cache=True)
-def initialize_population(population_size, layer_sizes, seed=None):
-    """Initialize random weights for entire population."""
-    if seed is not None:
-        np.random.seed(seed)
+    # Extract parameter arrays
+    weights_flat = parameters[start_idx:weights_end]
+    biases = parameters[weights_end:biases_end]
+    alphas = parameters[biases_end:alphas_end]
 
-    total_parameters = get_total_parameters(layer_sizes)
-    population = np.empty((population_size, total_weights), dtype=np.float64)
+    # Reshape weights for matrix operations
+    weights_matrix = weights_flat.reshape((from_size, to_size))
 
-    for i in range(population_size):
-        # Use different seed for each individual for diversity
-        individual_seed = None if seed is None else seed + i
-        population[i] = initialize_weights(layer_sizes, individual_seed)
+    return weights_flat, biases, alphas, weights_matrix
 
-    return population
+@njit(fastmath=True, cache=False)
+def discrete_time_leaky_integration(prev_state, linear_input, time_diff, alpha):
+    """Apply discrete-time leaky integration with time-aware decay."""
+    # Clamp alpha to valid range [0, 1]
+    alpha_clamped = max(0.0, min(1.0, alpha))
 
+    num_steps = max(0, int(time_diff / RESOLUTION))
+    decay_factor = alpha_clamped ** num_steps
+    decayed_state = prev_state * decay_factor
+    return alpha_clamped * decayed_state + (1.0 - alpha_clamped) * linear_input
 
-# ============================================================================
-# FITNESS FUNCTIONS
-# ============================================================================
+@njit(fastmath=True, cache=False)
+def apply_activation(value, activation_type):
+    """Apply activation function based on integer type.
 
-@njit(fastmath=True, cache=True)
-def evaluate_fitness_sphere(weights):
-    """Sphere function: f(x) = -sum(x_i^2) (negative for maximization)."""
-    return -np.sum(weights * weights)
-
-
-@njit(fastmath=True, cache=True)
-def evaluate_fitness_rastrigin(weights):
-    """Rastrigin function: f(x) = -[A*n + sum(x_i^2 - A*cos(2*pi*x_i))] (negative for maximization)."""
-    A = 10.0
-    n = len(weights)
-    sum_term = 0.0
-    for i in range(n):
-        sum_term += weights[i] ** 2 - A * np.cos(2 * np.pi * weights[i])
-    return -(A * n + sum_term)
-
-
-@njit(fastmath=True, cache=True)
-def evaluate_fitness(weights, fitness_id):
-    """Generic fitness dispatch: 0=sphere, 1=rastrigin, default=sphere."""
-    if fitness_id == 0:
-        return evaluate_fitness_sphere(weights)
-    elif fitness_id == 1:
-        return evaluate_fitness_rastrigin(weights)
+    Activation types:
+    0 = Linear/Identity (no activation)
+    1 = ReLU
+    2 = Sigmoid
+    3 = Tanh
+    4 = Leaky ReLU (alpha=0.01)
+    """
+    if activation_type == 0:  # Linear
+        return value
+    elif activation_type == 1:  # ReLU
+        return max(0.0, value)
+    elif activation_type == 2:  # Sigmoid
+        # Clamp input to prevent overflow
+        clamped = max(-500.0, min(500.0, value))
+        return 1.0 / (1.0 + math.exp(-clamped))
+    elif activation_type == 3:  # Tanh
+        return math.tanh(value)
+    elif activation_type == 4:  # Leaky ReLU
+        return max(0.01 * value, value)
     else:
-        # Default to sphere function
-        return evaluate_fitness_sphere(weights)
-
-
-# ============================================================================
-# POPULATION FITNESS EVALUATION
-# ============================================================================
-
-@njit(fastmath=True, cache=True, parallel=True)
-def evaluate_population_fitness(population, fitness_id):
-    """Evaluate fitness for entire population (parallel)."""
-    population_size = population.shape[0]
-    fitness_scores = np.empty(population_size, dtype=np.float64)
-
-    for i in prange(population_size):
-        fitness_scores[i] = evaluate_fitness(population[i], fitness_id)
-
-    return fitness_scores
-
-
-# ============================================================================
-# TOURNAMENT SELECTION
-# ============================================================================
-
-@njit(fastmath=True, cache=True)
-def tournament_selection_single(fitness_scores, tournament_size, seed=None):
-    """Select one individual using tournament selection."""
-    if seed is not None:
-        np.random.seed(seed)
-
-    population_size = len(fitness_scores)
-
-    # Select first tournament participant
-    best_index = np.random.randint(0, population_size)
-    best_fitness = fitness_scores[best_index]
-
-    # Compare with remaining tournament participants
-    for i in range(tournament_size - 1):
-        candidate_index = np.random.randint(0, population_size)
-        candidate_fitness = fitness_scores[candidate_index]
-
-        if candidate_fitness > best_fitness:  # Maximization
-            best_fitness = candidate_fitness
-            best_index = candidate_index
-
-    return best_index
-
-
-@njit(fastmath=True, cache=True, parallel=True)
-def tournament_selection(fitness_scores, num_parents, tournament_size, seed=None):
-    """Select multiple parents using tournament selection (parallel)."""
-    if seed is not None:
-        np.random.seed(seed)
-
-    parent_indices = np.empty(num_parents, dtype=np.int64)
-
-    for i in prange(num_parents):
-        # Use different seed for each tournament for diversity
-        parent_seed = None if seed is None else seed + i
-        parent_indices[i] = tournament_selection_single(fitness_scores, tournament_size, parent_seed)
-
-    return parent_indices
-
-
-# ============================================================================
-# CROSSOVER OPERATIONS
-# ============================================================================
-
-@njit(fastmath=True, cache=True, parallel=True)
-def crossover_single_point(population, parent_indices, seed=None):
-    """Single-point crossover for multiple parent pairs (parallel)."""
-    if seed is not None:
-        np.random.seed(seed)
-
-    num_parents = len(parent_indices)
-    num_pairs = num_parents // 2
-    genome_length = population.shape[1]
-
-    # Create offspring array
-    offspring = np.empty((num_pairs * 2, genome_length), dtype=np.float64)
-
-    for i in prange(num_pairs):
-        # Get parent indices
-        parent1_idx = parent_indices[2 * i]
-        parent2_idx = parent_indices[2 * i + 1]
-
-        # Set unique seed for this crossover
-        if seed is not None:
-            np.random.seed(seed + i)
-
-        # Choose crossover point (avoid endpoints)
-        crossover_point = np.random.randint(1, genome_length)
-
-        # Create offspring indices
-        offspring1_idx = 2 * i
-        offspring2_idx = 2 * i + 1
-
-        # Copy parent segments before crossover point
-        for j in range(crossover_point):
-            offspring[offspring1_idx, j] = population[parent1_idx, j]
-            offspring[offspring2_idx, j] = population[parent2_idx, j]
-
-        # Swap segments after crossover point
-        for j in range(crossover_point, genome_length):
-            offspring[offspring1_idx, j] = population[parent2_idx, j]
-            offspring[offspring2_idx, j] = population[parent1_idx, j]
-
-    return offspring
-
-
-@njit(fastmath=True, cache=True, parallel=True)
-def crossover_uniform(population, parent_indices, crossover_rate=0.5, seed=None):
-    """Uniform crossover for multiple parent pairs (parallel)."""
-    if seed is not None:
-        np.random.seed(seed)
-
-    num_parents = len(parent_indices)
-    num_pairs = num_parents // 2
-    genome_length = population.shape[1]
-
-    # Create offspring array
-    offspring = np.empty((num_pairs * 2, genome_length), dtype=np.float64)
-
-    for i in prange(num_pairs):
-        # Get parent indices
-        parent1_idx = parent_indices[2 * i]
-        parent2_idx = parent_indices[2 * i + 1]
-
-        # Set unique seed for this crossover
-        if seed is not None:
-            np.random.seed(seed + i)
-
-        # Create offspring indices
-        offspring1_idx = 2 * i
-        offspring2_idx = 2 * i + 1
-
-        # Uniform crossover: for each gene, randomly choose parent
-        for j in range(genome_length):
-            if np.random.random() < crossover_rate:
-                # Swap genes
-                offspring[offspring1_idx, j] = population[parent2_idx, j]
-                offspring[offspring2_idx, j] = population[parent1_idx, j]
-            else:
-                # Keep original
-                offspring[offspring1_idx, j] = population[parent1_idx, j]
-                offspring[offspring2_idx, j] = population[parent2_idx, j]
-
-    return offspring
+        return value  # Default to linear for unknown types

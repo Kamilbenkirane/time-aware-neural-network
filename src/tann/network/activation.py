@@ -20,7 +20,7 @@ def apply_activation(value, activation_type):
         return max(0.0, value)
     elif activation_type == 2:  # Sigmoid
         # Clamp input to prevent overflow
-        clamped = max(-500.0, min(500.0, value))
+        clamped = max(-50.0, min(50.0, value))
         return 1.0 / (1.0 + math.exp(-clamped))
     elif activation_type == 3:  # Tanh
         return math.tanh(value)
